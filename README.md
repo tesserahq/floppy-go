@@ -134,6 +134,13 @@ Artifacts land in `dist/` as:
 
 ### Homebrew
 
+Install via Homebrew (macOS):
+
+```sh
+brew tap tesserahq/tap
+brew install floppy
+```
+
 A starter Homebrew formula lives at `packaging/homebrew/floppy.rb`. Update:
 
 - `homepage`
