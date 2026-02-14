@@ -1,0 +1,12 @@
+__pycache__/
+.venv
+.env
+.editorconfig
+.DS_Store
+.mypy_cache
+output/*
+.rsync-ignore
+node_modules/
+tmp
+floppy.egg-info
+services.yaml

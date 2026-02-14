@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.8"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Build package
+        run: python -m build
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          python -m twine upload dist/*
+
+      - name: Calculate SHA256
+        id: sha256
+        run: |
+          SHA256=$(curl -sL https://github.com/${{ github.repository }}/archive/refs/tags/${{ github.ref_name }}.tar.gz | sha256sum | cut -d' ' -f1)
+          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+
+      - name: Update Homebrew formula
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+
+          # Clone your Homebrew tap repository
+          git clone https://github.com/yourusername/homebrew-tap.git
+          cd homebrew-tap
+
+          # Update the formula
+          sed -i "s|url \".*\"|url \"https://github.com/${{ github.repository }}/archive/refs/tags/${{ github.ref_name }}.tar.gz\"|" Formula/floppy.rb
+          sed -i "s|sha256 \".*\"|sha256 \"${{ steps.sha256.outputs.sha256 }}\"|" Formula/floppy.rb
+
+          # Commit and push
+          git add Formula/floppy.rb
+          git commit -m "Update floppy to ${{ github.ref_name }}"
+          git push
