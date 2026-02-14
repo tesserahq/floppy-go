@@ -5,53 +5,56 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          python-version: "3.8"
+          go-version-file: go.mod
+          cache: true
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install build twine
+      - name: Build release artifacts
+        run: make release
 
-      - name: Build package
-        run: python -m build
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/floppy-checksums.txt
 
-      - name: Publish to PyPI
+      - name: Update Homebrew tap
         env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+          TAP_REPO: tesserahq/homebrew-tap
+          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         run: |
-          python -m twine upload dist/*
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "TAP_GITHUB_TOKEN is not set; skipping tap update."
+            exit 0
+          fi
 
-      - name: Calculate SHA256
-        id: sha256
-        run: |
-          SHA256=$(curl -sL https://github.com/${{ github.repository }}/archive/refs/tags/${{ github.ref_name }}.tar.gz | sha256sum | cut -d' ' -f1)
-          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+          VERSION="${GITHUB_REF_NAME#v}"
+          scripts/update-homebrew-formula.sh "$VERSION"
 
-      - name: Update Homebrew formula
-        run: |
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
 
-          # Clone your Homebrew tap repository
-          git clone https://github.com/yourusername/homebrew-tap.git
-          cd homebrew-tap
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git"
+          cp packaging/homebrew/floppy.rb "${TAP_REPO}/Formula/floppy.rb"
+          cd "${TAP_REPO}"
 
-          # Update the formula
-          sed -i "s|url \".*\"|url \"https://github.com/${{ github.repository }}/archive/refs/tags/${{ github.ref_name }}.tar.gz\"|" Formula/floppy.rb
-          sed -i "s|sha256 \".*\"|sha256 \"${{ steps.sha256.outputs.sha256 }}\"|" Formula/floppy.rb
-
-          # Commit and push
           git add Formula/floppy.rb
-          git commit -m "Update floppy to ${{ github.ref_name }}"
+          if git diff --cached --quiet; then
+            echo "No formula changes to commit."
+            exit 0
+          fi
+          git commit -m "Update floppy to v${VERSION}"
           git push
