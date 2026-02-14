@@ -38,7 +38,13 @@ if [[ -z "$VERSION" ]]; then
   exit 1
 fi
 
-sed -i '' \
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  SED_INPLACE=(sed -i '')
+else
+  SED_INPLACE=(sed -i)
+fi
+
+"${SED_INPLACE[@]}" \
   -e "s|/releases/download/v[0-9.\-]*/floppy-darwin-arm64.tar.gz|/releases/download/v${VERSION}/floppy-darwin-arm64.tar.gz|" \
   -e "s|/releases/download/v[0-9.\-]*/floppy-darwin-amd64.tar.gz|/releases/download/v${VERSION}/floppy-darwin-amd64.tar.gz|" \
   -e "s/sha256 \"[0-9a-f]\{64\}\"/sha256 \"${sha_darwin_arm64}\"/1" \
