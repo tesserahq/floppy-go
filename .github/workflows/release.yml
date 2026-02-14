@@ -47,9 +47,11 @@ jobs:
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
 
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git"
-          cp packaging/homebrew/floppy.rb "${TAP_REPO}/Formula/floppy.rb"
-          cd "${TAP_REPO}"
+          TAP_DIR="homebrew-tap"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" "${TAP_DIR}"
+          mkdir -p "${TAP_DIR}/Formula"
+          cp packaging/homebrew/floppy.rb "${TAP_DIR}/Formula/floppy.rb"
+          cd "${TAP_DIR}"
 
           git add Formula/floppy.rb
           if git diff --cached --quiet; then
