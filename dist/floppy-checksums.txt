@@ -1,4 +1,0 @@
-f4d546c386b45a646ca41a87a0bd296d29c784aec5830c19e6441ca366ad5c0b  floppy-darwin-amd64.tar.gz
-4b131755a6af497b470cac254da9c9261e41e7e8eab354053d9afcd86ee12c76  floppy-darwin-arm64.tar.gz
-56c227e87a21d500ebcca07effc76720bf21c2a239a671355abfcb0e549d20af  floppy-linux-amd64.tar.gz
-d315d5f3028f3825e912d4bbe95b06a0efd251456875df743eb09c63a86477fe  floppy-linux-arm64.tar.gz
