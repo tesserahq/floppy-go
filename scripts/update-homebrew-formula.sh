@@ -48,8 +48,8 @@ fi
   -e "s/^  version \".*\"/  version \"${VERSION}\"/" \
   -e "s|/releases/download/v[0-9.\-]*/floppy-darwin-arm64.tar.gz|/releases/download/v${VERSION}/floppy-darwin-arm64.tar.gz|" \
   -e "s|/releases/download/v[0-9.\-]*/floppy-darwin-amd64.tar.gz|/releases/download/v${VERSION}/floppy-darwin-amd64.tar.gz|" \
-  -e "s/sha256 \"[0-9a-f]\{64\}\"/sha256 \"${sha_darwin_arm64}\"/1" \
-  -e "s/sha256 \"[0-9a-f]\{64\}\"/sha256 \"${sha_darwin_amd64}\"/2" \
+  -e "s/sha256 \".*\"/sha256 \"${sha_darwin_arm64}\"/1" \
+  -e "s/sha256 \".*\"/sha256 \"${sha_darwin_amd64}\"/2" \
   "$FORMULA"
 
 echo "Updated $FORMULA with version v${VERSION} and darwin checksums."
