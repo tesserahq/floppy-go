@@ -234,11 +234,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
-			if msg.Action == tea.MouseActionPress || msg.Action == tea.MouseActionRelease || (msg.Action == tea.MouseActionMotion && m.logSelecting) {
+			// Only consume left-button selection events; let wheel events fall through to viewport
+			if (msg.Action == tea.MouseActionPress || msg.Action == tea.MouseActionRelease) && msg.Button == tea.MouseButtonLeft {
+				return m, nil
+			}
+			if msg.Action == tea.MouseActionMotion && m.logSelecting {
 				return m, nil
 			}
 		}
-		if !m.logSelecting && (msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown) {
+		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
 			m.follow = m.viewport.AtBottom()
