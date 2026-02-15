@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"floppy-go/internal/dockerstats"
 	"floppy-go/internal/postgresstats"
 
 	"github.com/atotto/clipboard"
@@ -56,7 +57,13 @@ type Model struct {
 	postgresURL string
 	pgStatsCh   chan postgresstats.Stats
 	pgStats     *postgresstats.Stats
-	tickCount   int
+
+	// Docker monitor (optional)
+	dockerEnabled bool
+	dockerStatsCh chan dockerstats.Stats
+	dockerStats   *dockerstats.Stats
+
+	tickCount int
 
 	// Log selection (when focus is on logs)
 	lastLogContent string
@@ -67,25 +74,29 @@ type Model struct {
 
 type tickMsg time.Time
 
-func NewModel(logCh <-chan LogLine, statusCh <-chan StatusUpdate, initial []ServiceRow, postgresURL string) *Model {
+func NewModel(logCh <-chan LogLine, statusCh <-chan StatusUpdate, initial []ServiceRow, postgresURL string, dockerEnabled bool) *Model {
 	statuses := map[string]ServiceRow{}
 	for _, row := range initial {
 		statuses[row.Name] = row
 	}
 
 	m := &Model{
-		viewport:   viewport.New(10, 10),
-		logCh:      logCh,
-		statusCh:   statusCh,
-		logs:       []LogLine{},
-		statuses:   statuses,
-		filters:    map[string]bool{},
-		colors:     map[string]lipgloss.Color{},
-		follow:     true,
-		postgresURL: postgresURL,
+		viewport:     viewport.New(10, 10),
+		logCh:        logCh,
+		statusCh:     statusCh,
+		logs:         []LogLine{},
+		statuses:     statuses,
+		filters:      map[string]bool{},
+		colors:       map[string]lipgloss.Color{},
+		follow:       true,
+		postgresURL:  postgresURL,
+		dockerEnabled: dockerEnabled,
 	}
 	if postgresURL != "" {
 		m.pgStatsCh = make(chan postgresstats.Stats, 1)
+	}
+	if dockerEnabled {
+		m.dockerStatsCh = make(chan dockerstats.Stats, 1)
 	}
 	return m
 }
@@ -252,15 +263,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.drainLogs()
 		m.drainStatuses()
 		m.drainPgStats()
+		m.drainDockerStats()
 		m.tickCount++
-		if m.postgresURL != "" && m.tickCount%30 == 1 {
-			go func() {
-				s := postgresstats.Fetch(context.Background(), m.postgresURL)
-				select {
-				case m.pgStatsCh <- s:
-				default:
-				}
-			}()
+		if m.tickCount%30 == 1 {
+			if m.postgresURL != "" {
+				go func() {
+					s := postgresstats.Fetch(context.Background(), m.postgresURL)
+					select {
+					case m.pgStatsCh <- s:
+					default:
+					}
+				}()
+			}
+			if m.dockerEnabled {
+				go func() {
+					s := dockerstats.Fetch(context.Background())
+					select {
+					case m.dockerStatsCh <- s:
+					default:
+					}
+				}()
+			}
 		}
 		m.renderViewport()
 		return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
@@ -318,6 +341,20 @@ func (m *Model) drainPgStats() {
 		select {
 		case s := <-m.pgStatsCh:
 			m.pgStats = &s
+		default:
+			return
+		}
+	}
+}
+
+func (m *Model) drainDockerStats() {
+	if m.dockerStatsCh == nil {
+		return
+	}
+	for {
+		select {
+		case s := <-m.dockerStatsCh:
+			m.dockerStats = &s
 		default:
 			return
 		}
@@ -432,11 +469,14 @@ func (m *Model) renderStatusPanel() string {
 
 func (m *Model) renderRightPanel() string {
 	status := m.renderStatusPanel()
-	if m.postgresURL == "" {
-		return status
+	panels := []string{status}
+	if m.postgresURL != "" {
+		panels = append(panels, m.renderPostgresPanel())
 	}
-	pg := m.renderPostgresPanel()
-	return lipgloss.JoinVertical(lipgloss.Left, status, pg)
+	if m.dockerEnabled {
+		panels = append(panels, m.renderDockerPanel())
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, panels...)
 }
 
 func (m *Model) renderPostgresPanel() string {
@@ -477,6 +517,56 @@ func (m *Model) renderPostgresPanel() string {
 	if s.DatabaseSize != "" {
 		lines = append(lines, fmt.Sprintf("DB size       %s", s.DatabaseSize))
 	}
+	return box.Width(52).Render(strings.Join(lines, "\n"))
+}
+
+const dockerWarnRatio = 0.85 // show in red when usage >= 85% of limit
+
+func (m *Model) renderDockerPanel() string {
+	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).Padding(0, 1)
+	title := "Docker"
+	lines := []string{lipgloss.NewStyle().Bold(true).Render(title)}
+
+	if m.dockerStats == nil {
+		lines = append(lines, " connecting…")
+		return box.Width(52).Render(strings.Join(lines, "\n"))
+	}
+	s := m.dockerStats
+	if s.Error != "" {
+		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render("error: "+s.Error))
+		return box.Width(52).Render(strings.Join(lines, "\n"))
+	}
+
+	// RAM: used (limit); red if close to limit
+	ramStr := dockerstats.FormatSize(s.RAMUsedBytes)
+	if s.RAMLimitBytes > 0 {
+		ramStr = ramStr + " / " + dockerstats.FormatSize(s.RAMLimitBytes)
+		if s.RAMUsedBytes > 0 {
+			if r := float64(s.RAMUsedBytes) / float64(s.RAMLimitBytes); r >= dockerWarnRatio {
+				ramStr = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render(ramStr)
+			}
+		}
+	}
+	lines = append(lines, fmt.Sprintf("RAM    %s", ramStr))
+
+	// CPU
+	cpuStr := fmt.Sprintf("%.2f%%", s.CPUPercent)
+	lines = append(lines, fmt.Sprintf("CPU    %s", cpuStr))
+
+	// Disk: used (limit); red if close to limit
+	diskStr := dockerstats.FormatSize(s.DiskUsedBytes)
+	if s.DiskLimitBytes > 0 {
+		diskStr = diskStr + " (limit " + dockerstats.FormatSize(s.DiskLimitBytes) + ")"
+		if s.DiskUsedBytes > 0 {
+			if r := float64(s.DiskUsedBytes) / float64(s.DiskLimitBytes); r >= dockerWarnRatio {
+				diskStr = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render(diskStr)
+			}
+		}
+	} else {
+		diskStr = diskStr + " used"
+	}
+	lines = append(lines, fmt.Sprintf("Disk   %s", diskStr))
+
 	return box.Width(52).Render(strings.Join(lines, "\n"))
 }
 

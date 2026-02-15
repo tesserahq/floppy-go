@@ -1,8 +1,11 @@
-# Optional: show Postgres stats in the TUI when running `floppy up` (connections,
-# idle-in-transaction, long-running queries, blocking locks, cache hit, DB size).
+# Optional: show Postgres and Docker stats in the TUI when running `floppy up`.
+# - db: connections, idle-in-transaction, long-running queries, blocking locks, cache hit, DB size.
+# - docker: RAM (used / limit), CPU %, Disk used. RAM/Disk turn red when close to limit.
 stats:
   db:
     url: postgres://postgres:postgres@localhost:5432/stats
+    enabled: true
+  docker:
     enabled: true
 
 

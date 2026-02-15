@@ -17,15 +17,21 @@ type Config struct {
 	Bundles  map[string][]string   `yaml:"bundles"`
 }
 
-// StatsConfig holds optional monitoring endpoints (e.g. Postgres).
+// StatsConfig holds optional monitoring endpoints (e.g. Postgres, Docker).
 type StatsConfig struct {
-	DB *DBStatsConfig `yaml:"db"`
+	DB     *DBStatsConfig     `yaml:"db"`
+	Docker *DockerStatsConfig `yaml:"docker"`
 }
 
 // DBStatsConfig is the Postgres monitor (url from stats.db used for connection).
 type DBStatsConfig struct {
 	URL     string `yaml:"url"`
 	Enabled bool   `yaml:"enabled"`
+}
+
+// DockerStatsConfig enables the Docker resource stats panel in the TUI.
+type DockerStatsConfig struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 type ServiceDef struct {
