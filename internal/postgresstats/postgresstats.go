@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -23,13 +24,27 @@ type Stats struct {
 
 const longQuerySec = 30
 
+// ensureSSLOption appends sslmode=disable to the URL if no sslmode is set,
+// so local Postgres without SSL (common in dev) works by default.
+func ensureSSLOption(url string) string {
+	if strings.Contains(url, "sslmode=") {
+		return url
+	}
+	if strings.Contains(url, "?") {
+		return url + "&sslmode=disable"
+	}
+	return url + "?sslmode=disable"
+}
+
 // Fetch connects to the given Postgres URL, runs read-only queries, and returns Stats.
 // It uses a short timeout so the TUI doesn't block.
+// If the URL does not specify sslmode, sslmode=disable is added so local servers without SSL work.
 func Fetch(ctx context.Context, url string) Stats {
 	out := Stats{}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
+	url = ensureSSLOption(url)
 	db, err := sql.Open("postgres", url)
 	if err != nil {
 		out.Error = err.Error()
