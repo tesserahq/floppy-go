@@ -144,11 +144,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.moveSelection(1)
 				return m, nil
 			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			m.follow = m.viewport.AtBottom()
+			return m, cmd
 		case "k", "up":
 			if m.focusStatus {
 				m.moveSelection(-1)
 				return m, nil
 			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			m.follow = m.viewport.AtBottom()
+			return m, cmd
 		case "g":
 			if m.focusStatus {
 				m.selected = 0
@@ -165,7 +173,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.GotoBottom()
 			m.follow = true
 			return m, nil
-		case "up", "down", "pgup", "pgdown", "home", "end":
+		case "pgup", "pgdown", "home":
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
 			m.follow = m.viewport.AtBottom()
