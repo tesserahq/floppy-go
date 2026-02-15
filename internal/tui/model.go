@@ -1,11 +1,16 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"floppy-go/internal/postgresstats"
+
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -46,26 +51,43 @@ type Model struct {
 	filterText  string
 	mu          sync.Mutex
 	initialized bool
+
+	// Postgres monitor (optional)
+	postgresURL string
+	pgStatsCh   chan postgresstats.Stats
+	pgStats     *postgresstats.Stats
+	tickCount   int
+
+	// Log selection (when focus is on logs)
+	lastLogContent string
+	logSelStart    int
+	logSelEnd      int
+	logSelecting   bool
 }
 
 type tickMsg time.Time
 
-func NewModel(logCh <-chan LogLine, statusCh <-chan StatusUpdate, initial []ServiceRow) *Model {
+func NewModel(logCh <-chan LogLine, statusCh <-chan StatusUpdate, initial []ServiceRow, postgresURL string) *Model {
 	statuses := map[string]ServiceRow{}
 	for _, row := range initial {
 		statuses[row.Name] = row
 	}
 
-	return &Model{
-		viewport: viewport.New(10, 10),
-		logCh:    logCh,
-		statusCh: statusCh,
-		logs:     []LogLine{},
-		statuses: statuses,
-		filters:  map[string]bool{},
-		colors:   map[string]lipgloss.Color{},
-		follow:   true,
+	m := &Model{
+		viewport:   viewport.New(10, 10),
+		logCh:      logCh,
+		statusCh:   statusCh,
+		logs:       []LogLine{},
+		statuses:   statuses,
+		filters:    map[string]bool{},
+		colors:     map[string]lipgloss.Color{},
+		follow:     true,
+		postgresURL: postgresURL,
 	}
+	if postgresURL != "" {
+		m.pgStatsCh = make(chan postgresstats.Stats, 1)
+	}
+	return m
 }
 
 func NewProgram(model *Model) *tea.Program {
@@ -106,7 +128,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		switch msg.String() {
-		case "ctrl+c", "q":
+		case "ctrl+c":
+			if !m.focusStatus && m.copyLogSelection() {
+				return m, nil
+			}
+			m.interrupted = true
+			return m, tea.Quit
+		case "q":
 			m.interrupted = true
 			return m, tea.Quit
 		case "tab":
@@ -180,7 +208,37 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 	case tea.MouseMsg:
-		if !m.focusStatus && (msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown) {
+		if m.focusStatus {
+			return m, nil
+		}
+		// Log panel content area: left panel has border+padding, so content at (2,2)
+		contentLeft, contentTop := 2, 2
+		inLogContent := msg.X >= contentLeft && msg.Y >= contentTop &&
+			msg.X < contentLeft+m.viewport.Width && msg.Y < contentTop+m.viewport.Height
+		if inLogContent {
+			offset, ok := m.logContentOffsetAt(msg.X-contentLeft, msg.Y-contentTop)
+			if ok {
+				switch msg.Action {
+				case tea.MouseActionPress:
+					if msg.Button == tea.MouseButtonLeft {
+						m.logSelStart, m.logSelEnd = offset, offset
+						m.logSelecting = true
+					}
+				case tea.MouseActionMotion:
+					if m.logSelecting {
+						m.logSelEnd = offset
+					}
+				case tea.MouseActionRelease:
+					if msg.Button == tea.MouseButtonLeft {
+						m.logSelecting = false
+					}
+				}
+			}
+			if msg.Action == tea.MouseActionPress || msg.Action == tea.MouseActionRelease || (msg.Action == tea.MouseActionMotion && m.logSelecting) {
+				return m, nil
+			}
+		}
+		if !m.logSelecting && (msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown) {
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
 			m.follow = m.viewport.AtBottom()
@@ -189,6 +247,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		m.drainLogs()
 		m.drainStatuses()
+		m.drainPgStats()
+		m.tickCount++
+		if m.postgresURL != "" && m.tickCount%30 == 1 {
+			go func() {
+				s := postgresstats.Fetch(context.Background(), m.postgresURL)
+				select {
+				case m.pgStatsCh <- s:
+				default:
+				}
+			}()
+		}
 		m.renderViewport()
 		return m, tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
 	}
@@ -197,7 +266,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) View() string {
 	left := m.renderLogsPanel()
-	right := m.renderStatusPanel()
+	right := m.renderRightPanel()
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 	footer := m.renderFooter()
 	return lipgloss.JoinVertical(lipgloss.Left, body, footer)
@@ -237,6 +306,20 @@ func (m *Model) drainStatuses() {
 	}
 }
 
+func (m *Model) drainPgStats() {
+	if m.pgStatsCh == nil {
+		return
+	}
+	for {
+		select {
+		case s := <-m.pgStatsCh:
+			m.pgStats = &s
+		default:
+			return
+		}
+	}
+}
+
 func (m *Model) appendLog(line LogLine) {
 	service := line.Service
 	if service == "" {
@@ -264,7 +347,23 @@ func (m *Model) renderViewport() {
 		prefix := lipgloss.NewStyle().Foreground(color).Render(fmt.Sprintf("[%s]", line.Service))
 		lines = append(lines, fmt.Sprintf("%s %s", prefix, line.Text))
 	}
-	m.viewport.SetContent(strings.Join(lines, "\n"))
+	content := strings.Join(lines, "\n")
+	m.lastLogContent = content
+	if m.logSelStart != m.logSelEnd {
+		s, e := m.logSelStart, m.logSelEnd
+		if s > e {
+			s, e = e, s
+		}
+		if s < 0 {
+			s = 0
+		}
+		if e > len(content) {
+			e = len(content)
+		}
+		// Reverse video for selection (SGR 7)
+		content = content[:s] + "\x1b[7m" + content[s:e] + "\x1b[0m" + content[e:]
+	}
+	m.viewport.SetContent(content)
 	if m.follow {
 		m.viewport.GotoBottom()
 	}
@@ -325,6 +424,56 @@ func (m *Model) renderStatusPanel() string {
 	content := strings.Join(statusLines, "\n")
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).Padding(0, 1)
 	return box.Width(52).Render(content)
+}
+
+func (m *Model) renderRightPanel() string {
+	status := m.renderStatusPanel()
+	if m.postgresURL == "" {
+		return status
+	}
+	pg := m.renderPostgresPanel()
+	return lipgloss.JoinVertical(lipgloss.Left, status, pg)
+}
+
+func (m *Model) renderPostgresPanel() string {
+	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).Padding(0, 1)
+	title := "Postgres"
+	lines := []string{lipgloss.NewStyle().Bold(true).Render(title)}
+
+	if m.pgStats == nil {
+		lines = append(lines, " connecting…")
+		return box.Width(52).Render(strings.Join(lines, "\n"))
+	}
+	s := m.pgStats
+	if s.Error != "" {
+		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render("error: "+s.Error))
+		return box.Width(52).Render(strings.Join(lines, "\n"))
+	}
+
+	connStr := fmt.Sprintf("%d / %d", s.Connections, s.MaxConnections)
+	if s.Connections > 0 && s.MaxConnections > 0 && float64(s.Connections)/float64(s.MaxConnections) > 0.9 {
+		connStr = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render(connStr)
+	}
+	lines = append(lines, fmt.Sprintf("Connections   %s", connStr))
+	lines = append(lines, fmt.Sprintf("Idle in tx    %d", s.IdleInTx))
+	if s.IdleInTx > 0 {
+		lines[len(lines)-1] = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render(lines[len(lines)-1])
+	}
+	lines = append(lines, fmt.Sprintf("Long-running  %d", s.LongRunning))
+	if s.LongRunning > 0 {
+		lines[len(lines)-1] = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render(lines[len(lines)-1])
+	}
+	lines = append(lines, fmt.Sprintf("Blocking      %d", s.BlockingLocks))
+	if s.BlockingLocks > 0 {
+		lines[len(lines)-1] = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render(lines[len(lines)-1])
+	}
+	if s.CacheHitRatio > 0 {
+		lines = append(lines, fmt.Sprintf("Cache hit     %.1f%%", s.CacheHitRatio*100))
+	}
+	if s.DatabaseSize != "" {
+		lines = append(lines, fmt.Sprintf("DB size       %s", s.DatabaseSize))
+	}
+	return box.Width(52).Render(strings.Join(lines, "\n"))
 }
 
 func (m *Model) moveSelection(delta int) {
@@ -410,7 +559,7 @@ func (m *Model) sortedRows() []ServiceRow {
 }
 
 func (m *Model) renderFooter() string {
-	keys := "keys: q quit • tab focus • / filter • space toggle • a all • n none • j/k scroll • g/G top/bottom • f follow"
+	keys := "keys: q quit • tab focus • / filter • space toggle • a all • n none • j/k scroll • g/G top/bottom • f follow • ctrl+c copy (select with mouse)"
 	if m.focusStatus {
 		keys = "keys: q quit • tab focus • / filter • space toggle • a all • n none • j/k select • g/G top/bottom • esc clear filter"
 	}
@@ -454,4 +603,64 @@ func portStr(port int) string {
 		return "-"
 	}
 	return fmt.Sprintf("%d", port)
+}
+
+// logContentOffsetAt returns the character offset in lastLogContent for the given
+// cell (x,y) in the visible viewport content. y is 0-based line in visible area.
+func (m *Model) logContentOffsetAt(x, y int) (int, bool) {
+	if m.lastLogContent == "" {
+		return 0, false
+	}
+	lines := strings.Split(m.lastLogContent, "\n")
+	lineIdx := m.viewport.YOffset + y
+	if lineIdx < 0 || lineIdx >= len(lines) {
+		return 0, false
+	}
+	line := lines[lineIdx]
+	if x < 0 {
+		x = 0
+	}
+	if x > len(line) {
+		x = len(line)
+	}
+	offset := 0
+	for i := 0; i < lineIdx; i++ {
+		offset += len(lines[i]) + 1
+	}
+	return offset + x, true
+}
+
+// copyLogSelection copies the selected log text (plain, ANSI stripped) to the clipboard.
+// Returns true if there was a selection and copy was attempted.
+func (m *Model) copyLogSelection() bool {
+	if m.lastLogContent == "" {
+		return false
+	}
+	s, e := m.logSelStart, m.logSelEnd
+	if s == e {
+		return false
+	}
+	if s > e {
+		s, e = e, s
+	}
+	if s < 0 {
+		s = 0
+	}
+	if e > len(m.lastLogContent) {
+		e = len(m.lastLogContent)
+	}
+	selected := m.lastLogContent[s:e]
+	plain := stripANSI(selected)
+	if plain == "" {
+		return true
+	}
+	_ = clipboard.WriteAll(plain)
+	return true
+}
+
+// stripANSI removes ANSI escape sequences (CSI SGR and similar) from s.
+var ansiCSI = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+
+func stripANSI(s string) string {
+	return ansiCSI.ReplaceAllString(s, "")
 }

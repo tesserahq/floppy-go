@@ -102,7 +102,11 @@ func (m *Manager) Up(services []string, detached bool, force bool, noPTY bool) e
 		return nil
 	}
 
-	model := tui.NewModel(logCh, statusCh, m.snapshotStatuses())
+	postgresURL := ""
+	if m.Config.Stats != nil && m.Config.Stats.DB != nil && m.Config.Stats.DB.Enabled && m.Config.Stats.DB.URL != "" {
+		postgresURL = m.Config.Stats.DB.URL
+	}
+	model := tui.NewModel(logCh, statusCh, m.snapshotStatuses(), postgresURL)
 	p := tui.NewProgram(model)
 	if err := p.Start(); err != nil {
 		return err

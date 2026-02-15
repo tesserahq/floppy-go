@@ -11,9 +11,21 @@ import (
 )
 
 type Config struct {
+	Stats    *StatsConfig          `yaml:"stats"`
 	Env      map[string]any        `yaml:"env"`
 	Services map[string]ServiceDef `yaml:"services"`
 	Bundles  map[string][]string   `yaml:"bundles"`
+}
+
+// StatsConfig holds optional monitoring endpoints (e.g. Postgres).
+type StatsConfig struct {
+	DB *DBStatsConfig `yaml:"db"`
+}
+
+// DBStatsConfig is the Postgres monitor (url from stats.db used for connection).
+type DBStatsConfig struct {
+	URL     string `yaml:"url"`
+	Enabled bool   `yaml:"enabled"`
 }
 
 type ServiceDef struct {

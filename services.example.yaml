@@ -1,0 +1,148 @@
+# Optional: show Postgres stats in the TUI when running `floppy up` (connections,
+# idle-in-transaction, long-running queries, blocking locks, cache hit, DB size).
+stats:
+  db:
+    url: postgres://postgres:postgres@localhost:5432/stats
+    enabled: true
+
+
+env:
+  DB_USER: postgres
+  DB_PASSWORD: postgres
+  DB_HOST: localhost
+  
+services:
+  eventa:
+    type: api
+    port: 8015
+    env:
+      NATS_SERVERS: "nats://127.0.0.1:4222"
+  eventa-nats-worker:
+    type: worker
+    port: 8016
+    worker_command: "nats_worker"
+    path: eventa
+  orcha:
+    type: api
+    port: 8014
+    env:
+  orcha-worker:
+    type: worker
+    port: 8006
+    path: orcha
+    env:
+      CELERY_LOGLEVEL: "info"
+      CELERY_POOL: "solo"
+      CELERY_CONCURRENCY: 1
+  orcha-nats-worker:
+    type: worker
+    port: 8016
+    worker_command: "nats_worker"
+    path: orcha
+  looply:
+    type: api
+    port: 8013
+    env:
+      EVENT_TYPE_PREFIX: com.looply
+      EVENT_SOURCE_PREFIX: looply
+  chrona:
+    type: api
+    port: 8012
+    env:
+  vaulta:
+    type: api
+    port: 8009
+    env:
+      MASTER_SECRET_KEY: xxxxxx
+  sendly:
+    type: api
+    port: 8010
+    env:
+  quore:
+    type: api
+    port: 8005
+    env:
+      OLLAMA_BASE_URL: "http://localhost:11434"
+  quore-worker:
+    type: worker
+    port: 8006
+    path: quore
+    env:
+      CELERY_LOGLEVEL: "info"
+      CELERY_POOL: "solo"
+      CELERY_CONCURRENCY: 1
+  custos:
+    type: api
+    port: 8002
+  identies:
+    type: api
+    port: 8003
+    env:
+      VAULTA_API_URL: "http://localhost:8009"
+      INVITE_ONLY_ACCESS: "false"
+      EVENT_TYPE_PREFIX: com.identies
+      EVENT_SOURCE_PREFIX: identies-api
+  orcha-portal:
+    type: portal
+    port: 3003
+    hmr_port: 24671
+    env:
+      HOST_URL: "http://localhost:8001"
+      API_URL: "http://localhost:8014"
+      AUTH0_CLIENT_ID: xxxxxxx
+  custos-portal:
+    type: portal
+    port: 3000
+    hmr_port: 24678
+    env:
+      HOST_URL: "http://localhost:8002"
+      AUTH0_CLIENT_ID: xxxxxxx
+  quore-portal:
+    type: portal
+    port: 3001
+    hmr_port: 24679
+    env:
+      HOST_URL: "http://localhost:3001"
+      API_URL: "http://localhost:8005"
+      AUTH0_CLIENT_ID: xxxxxxx
+      DEV_HOST_URL: "http://localhost:3001"
+      QUORE_API_URL: "http://localhost:8005"
+  looply-portal:
+    type: portal
+    port: 3014
+    hmr_port: 24682
+    env:
+      HOST_URL: "http://localhost:3014"
+      API_URL: "http://localhost:8013"
+      AUTH0_CLIENT_ID: xxxxxxx
+      DEV_HOST_URL: "http://localhost:3014"
+      QUORE_API_URL: "http://localhost:8005"
+  vaulta-portal:
+    type: portal
+    port: 3002
+    hmr_port: 24683
+    env:
+      HOST_URL: "http://localhost:3002"
+      API_URL: "http://localhost:8009"
+      AUTH0_CLIENT_ID: xxxxxxx
+
+bundles:
+  chrona-bundle:
+    - identies
+    - chrona
+    - chrona-portal
+  orcha-bundle:
+    - identies
+    - orcha
+  looply-bundle:
+    - identies
+    - looply
+    - looply-portal
+    - custos
+  custos-bundle:
+    - identies
+    - custos
+    - custos-portal
+  custos-api-bundle:
+    - identies
+    - custos
