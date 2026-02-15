@@ -258,7 +258,7 @@ func (m *Manager) Exec(cmdArgs []string, serviceType string, exclude []string) e
 		return nil
 	}
 
-	cmdStr := strings.Join(cmdArgs, " ")
+	cmdStr := shellJoin(cmdArgs)
 	fmt.Printf("Running '%s' in %d service(s)...\n", cmdStr, len(services))
 
 	shell := os.Getenv("SHELL")
@@ -293,6 +293,31 @@ func (m *Manager) Exec(cmdArgs []string, serviceType string, exclude []string) e
 	}
 
 	return nil
+}
+
+func shellJoin(args []string) string {
+	parts := make([]string, 0, len(args))
+	for _, a := range args {
+		parts = append(parts, shellQuote(a))
+	}
+	return strings.Join(parts, " ")
+}
+
+// shellQuote preserves arguments for POSIX shells when using `sh -c`.
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	for _, r := range s {
+		if !(r == '_' || r == '-' || r == '.' || r == '/' ||
+			(r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9')) {
+			// Single-quote and escape any embedded single quotes.
+			return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+		}
+	}
+	return s
 }
 
 func (m *Manager) Pull(services []string) {
