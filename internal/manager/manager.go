@@ -634,7 +634,7 @@ func (m *Manager) prepareCmd(cmd *exec.Cmd, name string, svc config.ServiceDef) 
 	if svc.Port > 0 {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("PORT=%d", svc.Port))
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	syscallSetup(cmd)
 }
 
 func (m *Manager) startWithPipes(name string, cmd *exec.Cmd, logCh chan<- tui.LogLine, statusCh chan<- tui.StatusUpdate) error {
