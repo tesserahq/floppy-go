@@ -171,6 +171,7 @@ func cmdExec() *cobra.Command {
 			return mgr.Exec(args, serviceType, excludeList)
 		},
 	}
+	cmd.Flags().SetInterspersed(false) // Stop parsing flags after first arg so -r, -f, etc. pass through to COMMAND
 	cmd.Flags().StringVar(&serviceType, "type", "", "Filter by service type (api, worker, webapp, library, portal)")
 	cmd.Flags().StringVar(&exclude, "exclude", "", "Comma-separated list of services to exclude")
 	return cmd
