@@ -270,6 +270,18 @@ func cmdSetup() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "db",
+		Short: "Create databases only for type=api services",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mgr, err := loadManager()
+			if err != nil {
+				return err
+			}
+			mgr.SetupDB()
+			return nil
+		},
+	})
 	return cmd
 }
 

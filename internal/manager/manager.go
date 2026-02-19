@@ -477,27 +477,7 @@ func (m *Manager) Setup() {
 		_ = install.Run()
 	}
 
-	dbUser := valueOr(m.Config.Env["DB_USER"], "postgres")
-	dbPassword := valueOr(m.Config.Env["DB_PASSWORD"], "postgres")
-	dbHost := valueOr(m.Config.Env["DB_HOST"], "localhost")
-	pathEnv := os.Getenv("PATH")
-
-	for name := range m.Config.Services {
-		dbs := []string{name, fmt.Sprintf("%s_test", name)}
-		for _, db := range dbs {
-			query := fmt.Sprintf("SELECT 1 FROM pg_database WHERE datname = '%s'", db)
-			check := exec.Command("psql", "-U", dbUser, "-h", dbHost, "-tAc", query)
-			check.Env = append(os.Environ(), fmt.Sprintf("PGPASSWORD=%s", dbPassword), fmt.Sprintf("PATH=%s", pathEnv))
-			out, _ := check.Output()
-			if !strings.Contains(string(out), "1") {
-				create := exec.Command("psql", "-U", dbUser, "-h", dbHost, "-c", fmt.Sprintf("CREATE DATABASE \"%s\";", db))
-				create.Env = append(os.Environ(), fmt.Sprintf("PGPASSWORD=%s", dbPassword), fmt.Sprintf("PATH=%s", pathEnv))
-				create.Stdout = os.Stdout
-				create.Stderr = os.Stderr
-				_ = create.Run()
-			}
-		}
-	}
+	m.createDatabases(false) // all services in full setup
 
 	for name, svc := range m.Config.Services {
 		if !isPythonType(svc.Type) {
@@ -516,6 +496,38 @@ func (m *Manager) Setup() {
 	}
 
 	fmt.Println("Setup complete!")
+}
+
+func (m *Manager) SetupDB() {
+	m.createDatabases(true) // api services only
+	fmt.Println("Database setup complete!")
+}
+
+func (m *Manager) createDatabases(apiOnly bool) {
+	dbUser := valueOr(m.Config.Env["DB_USER"], "postgres")
+	dbPassword := valueOr(m.Config.Env["DB_PASSWORD"], "postgres")
+	dbHost := valueOr(m.Config.Env["DB_HOST"], "localhost")
+	pathEnv := os.Getenv("PATH")
+
+	for name, svc := range m.Config.Services {
+		if apiOnly && svc.Type != "api" {
+			continue
+		}
+		dbs := []string{name, fmt.Sprintf("%s_test", name)}
+		for _, db := range dbs {
+			query := fmt.Sprintf("SELECT 1 FROM pg_database WHERE datname = '%s'", db)
+			check := exec.Command("psql", "-U", dbUser, "-h", dbHost, "-tAc", query)
+			check.Env = append(os.Environ(), fmt.Sprintf("PGPASSWORD=%s", dbPassword), fmt.Sprintf("PATH=%s", pathEnv))
+			out, _ := check.Output()
+			if !strings.Contains(string(out), "1") {
+				create := exec.Command("psql", "-U", dbUser, "-h", dbHost, "-c", fmt.Sprintf("CREATE DATABASE \"%s\";", db))
+				create.Env = append(os.Environ(), fmt.Sprintf("PGPASSWORD=%s", dbPassword), fmt.Sprintf("PATH=%s", pathEnv))
+				create.Stdout = os.Stdout
+				create.Stderr = os.Stderr
+				_ = create.Run()
+			}
+		}
+	}
 }
 
 func (m *Manager) Logs(service string, follow bool, tail int) {
