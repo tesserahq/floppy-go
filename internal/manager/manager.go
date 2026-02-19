@@ -520,9 +520,10 @@ func (m *Manager) createDatabases(apiOnly bool) {
 			check.Env = append(os.Environ(), fmt.Sprintf("PGPASSWORD=%s", dbPassword), fmt.Sprintf("PATH=%s", pathEnv))
 			out, _ := check.Output()
 			if !strings.Contains(string(out), "1") {
+				fmt.Printf("Creating database: %s\n", db)
 				create := exec.Command("psql", "-U", dbUser, "-h", dbHost, "-c", fmt.Sprintf("CREATE DATABASE \"%s\";", db))
 				create.Env = append(os.Environ(), fmt.Sprintf("PGPASSWORD=%s", dbPassword), fmt.Sprintf("PATH=%s", pathEnv))
-				create.Stdout = os.Stdout
+				create.Stdout = io.Discard
 				create.Stderr = os.Stderr
 				_ = create.Run()
 			}
