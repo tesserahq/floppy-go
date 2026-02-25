@@ -85,6 +85,7 @@ func cmdUp() *cobra.Command {
 
 func cmdStop() *cobra.Command {
 	var remove bool
+	var forcePortKill bool
 	cmd := &cobra.Command{
 		Use:   "stop [service ...]",
 		Short: "Stop services",
@@ -94,15 +95,17 @@ func cmdStop() *cobra.Command {
 				return err
 			}
 			_ = remove
-			return mgr.Stop(args)
+			return mgr.Stop(args, forcePortKill)
 		},
 	}
 	cmd.Flags().BoolVar(&remove, "remove", false, "Remove stopped services (reserved)")
+	cmd.Flags().BoolVar(&forcePortKill, "force-port-kill", false, "Fallback to killing any process bound to service ports")
 	return cmd
 }
 
 func cmdDown() *cobra.Command {
 	var remove bool
+	var forcePortKill bool
 	cmd := &cobra.Command{
 		Use:   "down [service ...]",
 		Short: "Stop services (alias for stop)",
@@ -112,10 +115,11 @@ func cmdDown() *cobra.Command {
 				return err
 			}
 			_ = remove
-			return mgr.Stop(args)
+			return mgr.Stop(args, forcePortKill)
 		},
 	}
 	cmd.Flags().BoolVar(&remove, "remove", false, "Remove stopped services (reserved)")
+	cmd.Flags().BoolVar(&forcePortKill, "force-port-kill", false, "Fallback to killing any process bound to service ports")
 	return cmd
 }
 

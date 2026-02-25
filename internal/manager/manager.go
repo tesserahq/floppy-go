@@ -113,23 +113,36 @@ func (m *Manager) Up(services []string, detached bool, force bool, noPTY bool) e
 		return err
 	}
 	if model.Interrupted() {
-		m.Stop(services)
+		m.Stop(services, false)
 	}
 	return nil
 }
 
-func (m *Manager) Stop(services []string) error {
+func (m *Manager) Stop(services []string, forcePortKill bool) error {
+	state := loadProcessState()
 	detected := DetectRunningServices(m.Config, m.Root)
 
 	toStop := []string{}
 	if len(services) == 0 {
-		for name := range detected {
+		for _, name := range stableKeys(state.Entries) {
 			toStop = append(toStop, name)
+		}
+		if len(toStop) == 0 && forcePortKill {
+			for name := range detected {
+				toStop = append(toStop, name)
+			}
+			sort.Strings(toStop)
 		}
 	} else {
 		for _, name := range services {
-			if _, ok := detected[name]; ok {
+			if _, ok := state.Entries[name]; ok {
 				toStop = append(toStop, name)
+				continue
+			}
+			if forcePortKill {
+				if _, ok := detected[name]; ok {
+					toStop = append(toStop, name)
+				}
 			}
 		}
 	}
@@ -140,21 +153,64 @@ func (m *Manager) Stop(services []string) error {
 	}
 
 	for _, name := range toStop {
+		entry, tracked := state.Entries[name]
+		if tracked {
+			if !processAlive(entry.PID) {
+				delete(state.Entries, name)
+				fmt.Printf("Skipping %s: tracked PID %d is no longer running\n", name, entry.PID)
+				continue
+			}
+			actualCmdline := processCmdline(entry.PID)
+			if !commandContainsExpected(actualCmdline, entry.Cmdline) {
+				if forcePortKill {
+					fmt.Printf("Warning: %s tracked PID %d does not match original command; using port fallback\n", name, entry.PID)
+				} else {
+					fmt.Printf("Skipping %s: tracked PID %d command no longer matches (use --force-port-kill to fallback)\n", name, entry.PID)
+					continue
+				}
+			} else {
+				if err := killProcess(entry.PID); err != nil {
+					fmt.Printf("Failed to stop %s (tracked PID %d): %v\n", name, entry.PID, err)
+				} else {
+					delete(state.Entries, name)
+					fmt.Printf("Stopped %s\n", name)
+				}
+				continue
+			}
+		}
+
+		if !forcePortKill {
+			if !tracked {
+				fmt.Printf("Skipping %s: no tracked process (use --force-port-kill to stop by port)\n", name)
+			}
+			continue
+		}
+
 		svc := m.Config.Services[name]
 		if svc.Port > 0 {
 			if err := killPort(svc.Port); err != nil {
 				fmt.Printf("Failed to stop %s (port %d): %v\n", name, svc.Port, err)
 			} else {
+				delete(state.Entries, name)
 				fmt.Printf("Stopped %s\n", name)
 			}
 			continue
 		}
-		info := detected[name]
+		info, ok := detected[name]
+		if !ok {
+			fmt.Printf("Skipping %s: no running process found for fallback\n", name)
+			continue
+		}
 		if err := killProcess(info.PID); err != nil {
 			fmt.Printf("Failed to stop %s (PID %d): %v\n", name, info.PID, err)
 		} else {
+			delete(state.Entries, name)
 			fmt.Printf("Stopped %s\n", name)
 		}
+	}
+
+	if err := saveProcessState(state); err != nil {
+		fmt.Printf("Warning: failed to persist process state: %v\n", err)
 	}
 
 	return nil
@@ -591,6 +647,7 @@ func (m *Manager) startService(name string, detached bool, noPTY bool, logCh cha
 			return err
 		}
 		m.trackProcess(name, cmd)
+		m.recordStartedProcess(name, cmd)
 		statusCh <- tui.StatusUpdate{Name: name, Status: "running", PID: cmd.Process.Pid}
 		go func() {
 			_ = cmd.Wait()
@@ -617,6 +674,7 @@ func (m *Manager) startService(name string, detached bool, noPTY bool, logCh cha
 		return err
 	}
 	m.trackProcess(name, cmd)
+	m.recordStartedProcess(name, cmd)
 	statusCh <- tui.StatusUpdate{Name: name, Status: "running", PID: cmd.Process.Pid}
 
 	go func() {
@@ -665,6 +723,7 @@ func (m *Manager) startWithPipes(name string, cmd *exec.Cmd, logCh chan<- tui.Lo
 		return err
 	}
 	m.trackProcess(name, cmd)
+	m.recordStartedProcess(name, cmd)
 	statusCh <- tui.StatusUpdate{Name: name, Status: "running", PID: cmd.Process.Pid}
 
 	go readLines(name, stdout, logCh)
@@ -726,6 +785,24 @@ func (m *Manager) trackProcess(name string, cmd *exec.Cmd) {
 	m.procMu.Lock()
 	defer m.procMu.Unlock()
 	m.processes[name] = cmd
+}
+
+func (m *Manager) recordStartedProcess(name string, cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	state := loadProcessState()
+	pgid, _ := syscall.Getpgid(cmd.Process.Pid)
+	state.Entries[name] = ProcessEntry{
+		Service: name,
+		PID:     cmd.Process.Pid,
+		PGID:    pgid,
+		Cwd:     cmd.Dir,
+		Cmdline: strings.TrimSpace(strings.Join(cmd.Args, " ")),
+	}
+	if err := saveProcessState(state); err != nil {
+		fmt.Printf("Warning: failed to persist process state for %s: %v\n", name, err)
+	}
 }
 
 func (m *Manager) snapshotStatuses() []tui.ServiceRow {

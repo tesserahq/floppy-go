@@ -66,8 +66,8 @@ If `-f` is not provided and no context is set:
 ## Commands
 
 - `up [service-or-bundle ...] [-d] [--force] [--build]`
-- `stop [service ...] [--remove]`
-- `down [service ...]` (alias of `stop`)
+- `stop [service ...] [--remove] [--force-port-kill]`
+- `down [service ...] [--force-port-kill]` (alias of `stop`)
 - `ps [-q]`
 - `list [--simple]`
 - `exec COMMAND [args...] [--type TYPE] [--exclude a,b,c]`
@@ -87,7 +87,8 @@ If `-f` is not provided and no context is set:
 ./floppy up linden-api      # Start a single service
 ./floppy up linden-bundle   # Start a bundle
 ./floppy up -d              # Detached mode
-./floppy stop               # Stop running services
+./floppy stop               # Stop only processes started by floppy
+./floppy stop --force-port-kill  # Fallback: kill by configured service ports
 ./floppy ps                 # List running services
 ./floppy list --simple      # Flat list
 ./floppy exec gst           # Run command in each service
