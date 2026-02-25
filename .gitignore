@@ -11,3 +11,4 @@ tmp
 floppy.egg-info
 services.yaml
 dist/
+floppy.exe
