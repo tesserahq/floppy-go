@@ -153,6 +153,7 @@ func (m *Manager) Stop(services []string, forcePortKill bool) error {
 	}
 
 	for _, name := range toStop {
+		svc := m.Config.Services[name]
 		entry, tracked := state.Entries[name]
 		if tracked {
 			if !processAlive(entry.PID) {
@@ -161,7 +162,10 @@ func (m *Manager) Stop(services []string, forcePortKill bool) error {
 				continue
 			}
 			actualCmdline := processCmdline(entry.PID)
-			if !commandContainsExpected(actualCmdline, entry.Cmdline) {
+			sameStartTime := entry.StartTime != "" && processStartTime(entry.PID) == entry.StartTime
+			portOwned := svc.Port > 0 && pidOwnsPort(svc.Port, entry.PID)
+			cmdMatches := commandContainsExpected(actualCmdline, entry.Cmdline)
+			if !(sameStartTime || portOwned || cmdMatches) {
 				if forcePortKill {
 					fmt.Printf("Warning: %s tracked PID %d does not match original command; using port fallback\n", name, entry.PID)
 				} else {
@@ -186,7 +190,6 @@ func (m *Manager) Stop(services []string, forcePortKill bool) error {
 			continue
 		}
 
-		svc := m.Config.Services[name]
 		if svc.Port > 0 {
 			if err := killPort(svc.Port); err != nil {
 				fmt.Printf("Failed to stop %s (port %d): %v\n", name, svc.Port, err)
@@ -794,11 +797,12 @@ func (m *Manager) recordStartedProcess(name string, cmd *exec.Cmd) {
 	state := loadProcessState()
 	pgid, _ := syscall.Getpgid(cmd.Process.Pid)
 	state.Entries[name] = ProcessEntry{
-		Service: name,
-		PID:     cmd.Process.Pid,
-		PGID:    pgid,
-		Cwd:     cmd.Dir,
-		Cmdline: strings.TrimSpace(strings.Join(cmd.Args, " ")),
+		Service:   name,
+		PID:       cmd.Process.Pid,
+		PGID:      pgid,
+		Cwd:       cmd.Dir,
+		Cmdline:   strings.TrimSpace(strings.Join(cmd.Args, " ")),
+		StartTime: processStartTime(cmd.Process.Pid),
 	}
 	if err := saveProcessState(state); err != nil {
 		fmt.Printf("Warning: failed to persist process state for %s: %v\n", name, err)

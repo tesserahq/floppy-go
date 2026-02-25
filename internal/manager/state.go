@@ -12,11 +12,12 @@ import (
 )
 
 type ProcessEntry struct {
-	Service string `json:"service"`
-	PID     int    `json:"pid"`
-	PGID    int    `json:"pgid"`
-	Cwd     string `json:"cwd"`
-	Cmdline string `json:"cmdline"`
+	Service   string `json:"service"`
+	PID       int    `json:"pid"`
+	PGID      int    `json:"pgid"`
+	Cwd       string `json:"cwd"`
+	Cmdline   string `json:"cmdline"`
+	StartTime string `json:"start_time"`
 }
 
 type ProcessState struct {
@@ -108,6 +109,17 @@ func processCmdline(pid int) string {
 		return ""
 	}
 	out, err := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func processStartTime(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	out, err := exec.Command("ps", "-o", "lstart=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		return ""
 	}

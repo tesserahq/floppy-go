@@ -67,6 +67,28 @@ func killPort(port int) error {
 	return nil
 }
 
+func pidOwnsPort(port int, pid int) bool {
+	if port <= 0 || pid <= 0 {
+		return false
+	}
+	cmd := exec.Command("lsof", "-t", "-i", fmt.Sprintf("tcp:%d", port))
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		p, convErr := strconv.Atoi(line)
+		if convErr == nil && p == pid {
+			return true
+		}
+	}
+	return false
+}
+
 func conflictsSummary(conflicts []PortConflict) string {
 	ports := []string{}
 	for _, c := range conflicts {
