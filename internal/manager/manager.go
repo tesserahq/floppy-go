@@ -913,6 +913,7 @@ func verb(update bool) string {
 }
 
 func (m *Manager) poetryAddOrUpdate(name, path, lib string, version string, allowUpdate bool) {
+	fmt.Printf("→ %s\n", name)
 	pyprojectPath := filepath.Join(path, "pyproject.toml")
 	if _, err := os.Stat(pyprojectPath); err != nil {
 		fmt.Printf("⚠️  pyproject.toml not found for %s, skipping\n", name)
@@ -924,7 +925,7 @@ func (m *Manager) poetryAddOrUpdate(name, path, lib string, version string, allo
 			return
 		}
 		fmt.Printf("✅ %s: set %s = %q in pyproject.toml\n", name, lib, version)
-		lock := exec.Command(resolveTool("poetry", "FLOPPY_POETRY"), "lock", "--no-update")
+		lock := exec.Command(resolveTool("poetry", "FLOPPY_POETRY"), "lock")
 		lock.Dir = path
 		lock.Stdout = os.Stdout
 		lock.Stderr = os.Stderr
