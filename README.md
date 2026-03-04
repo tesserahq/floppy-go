@@ -73,7 +73,7 @@ If `-f` is not provided and no context is set:
 - `exec COMMAND [args...] [--type TYPE] [--exclude a,b,c]`
 - `pull [service ...]`
 - `reset [--type TYPE] [--exclude a,b,c]`
-- `update-lib LIB [--type TYPE] [--exclude a,b,c]`
+- `update-lib LIB [--version VERSION] [--type TYPE] [--exclude a,b,c]`
 - `add-lib LIB [--type TYPE] [--exclude a,b,c]`
 - `setup`
 - `logs SERVICE [-f] [--tail N]`
@@ -94,6 +94,7 @@ If `-f` is not provided and no context is set:
 ./floppy exec gst           # Run command in each service
 ./floppy pull               # Git pull/clone
 ./floppy reset              # Git reset/clean
+./floppy update-lib fastapi --version v0.135.0   # Pin version in all pyproject.toml
 ./floppy setup              # Install deps, create DBs, run migrations
 ./floppy set-context -f /path/to/services.yaml
 ./floppy version

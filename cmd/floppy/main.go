@@ -221,9 +221,10 @@ func cmdReset() *cobra.Command {
 func cmdUpdateLib() *cobra.Command {
 	var serviceType string
 	var exclude string
+	var version string
 	cmd := &cobra.Command{
-		Use:   "update-lib LIB_NAME",
-		Short: "Update a dependency across services",
+		Use:   "update-lib LIB_NAME [--version VERSION]",
+		Short: "Update a dependency across services (use --version to pin in pyproject.toml)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			mgr, err := loadManager()
@@ -231,10 +232,11 @@ func cmdUpdateLib() *cobra.Command {
 				return err
 			}
 			excludeList := splitComma(exclude)
-			mgr.UpdateLib(args[0], serviceType, excludeList)
+			mgr.UpdateLib(args[0], version, serviceType, excludeList)
 			return nil
 		},
 	}
+	cmd.Flags().StringVarP(&version, "version", "v", "", "Pin dependency to this version (updates pyproject.toml for Python services)")
 	cmd.Flags().StringVar(&serviceType, "type", "", "Filter by service type")
 	cmd.Flags().StringVar(&exclude, "exclude", "", "Comma-separated list of services to exclude")
 	return cmd

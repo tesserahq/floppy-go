@@ -467,15 +467,15 @@ func (m *Manager) Reset(serviceType string, exclude []string) {
 	}
 }
 
-func (m *Manager) UpdateLib(lib string, serviceType string, exclude []string) {
-	m.updateOrAddLib(lib, serviceType, exclude, true)
+func (m *Manager) UpdateLib(lib string, version string, serviceType string, exclude []string) {
+	m.updateOrAddLib(lib, version, serviceType, exclude, true)
 }
 
 func (m *Manager) AddLib(lib string, serviceType string, exclude []string) {
-	m.updateOrAddLib(lib, serviceType, exclude, false)
+	m.updateOrAddLib(lib, "", serviceType, exclude, false)
 }
 
-func (m *Manager) updateOrAddLib(lib string, serviceType string, exclude []string, allowUpdate bool) {
+func (m *Manager) updateOrAddLib(lib string, version string, serviceType string, exclude []string, allowUpdate bool) {
 	excludeSet := map[string]struct{}{}
 	for _, name := range exclude {
 		excludeSet[name] = struct{}{}
@@ -495,7 +495,7 @@ func (m *Manager) updateOrAddLib(lib string, serviceType string, exclude []strin
 			continue
 		}
 		if isPythonType(svc.Type) {
-			m.poetryAddOrUpdate(name, path, lib, allowUpdate)
+			m.poetryAddOrUpdate(name, path, lib, version, allowUpdate)
 			continue
 		}
 		if svc.Type == "portal" {
@@ -912,9 +912,23 @@ func verb(update bool) string {
 	return "add"
 }
 
-func (m *Manager) poetryAddOrUpdate(name, path, lib string, allowUpdate bool) {
-	if _, err := os.Stat(filepath.Join(path, "pyproject.toml")); err != nil {
+func (m *Manager) poetryAddOrUpdate(name, path, lib string, version string, allowUpdate bool) {
+	pyprojectPath := filepath.Join(path, "pyproject.toml")
+	if _, err := os.Stat(pyprojectPath); err != nil {
 		fmt.Printf("⚠️  pyproject.toml not found for %s, skipping\n", name)
+		return
+	}
+	if version != "" {
+		if err := updatePyprojectDep(pyprojectPath, lib, version); err != nil {
+			fmt.Printf("⚠️  %s: %v\n", name, err)
+			return
+		}
+		fmt.Printf("✅ %s: set %s = %q in pyproject.toml\n", name, lib, version)
+		lock := exec.Command(resolveTool("poetry", "FLOPPY_POETRY"), "lock", "--no-update")
+		lock.Dir = path
+		lock.Stdout = os.Stdout
+		lock.Stderr = os.Stderr
+		_ = lock.Run()
 		return
 	}
 	cmd := exec.Command(resolveTool("poetry", "FLOPPY_POETRY"), "add", lib)
@@ -928,6 +942,32 @@ func (m *Manager) poetryAddOrUpdate(name, path, lib string, allowUpdate bool) {
 		update.Stderr = os.Stderr
 		_ = update.Run()
 	}
+}
+
+// updatePyprojectDep sets dependency lib to version in pyproject.toml (replacing any existing constraint).
+func updatePyprojectDep(pyprojectPath, lib, version string) error {
+	data, err := os.ReadFile(pyprojectPath)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	var updated bool
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if (strings.HasPrefix(trimmed, lib+" =") || strings.HasPrefix(trimmed, lib+"=")) && !updated {
+			trimmedLeft := strings.TrimLeft(line, " \t")
+			indent := line[:len(line)-len(trimmedLeft)]
+			lines[i] = indent + lib + ` = "` + version + `"`
+			updated = true
+		}
+	}
+	if !updated {
+		return fmt.Errorf("dependency %q not found in pyproject.toml", lib)
+	}
+	return os.WriteFile(pyprojectPath, []byte(strings.Join(lines, "\n")), 0644)
 }
 
 func (m *Manager) bunAdd(name, path, lib string) {
