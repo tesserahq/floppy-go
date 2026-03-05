@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"floppy-go/internal/dockerstats"
 	"floppy-go/internal/postgresstats"
@@ -179,6 +180,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+		case "Y":
+			if !m.focusStatus && m.copyVisibleLogs() {
+				return m, nil
+			}
 		case "j", "down":
 			if m.focusStatus {
 				m.moveSelection(1)
@@ -228,20 +233,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		inLogContent := msg.X >= contentLeft && msg.Y >= contentTop &&
 			msg.X < contentLeft+m.viewport.Width && msg.Y < contentTop+m.viewport.Height
 		if inLogContent {
-			offset, ok := m.logContentOffsetAt(msg.X-contentLeft, msg.Y-contentTop)
-			if ok {
+			cx, cy := msg.X-contentLeft, msg.Y-contentTop
+			startOff, startOk := m.logContentOffsetAt(cx, cy)
+			endOff, endOk := m.logContentOffsetAtEnd(cx, cy)
+			if startOk {
 				switch msg.Action {
 				case tea.MouseActionPress:
 					if msg.Button == tea.MouseButtonLeft {
-						m.logSelStart, m.logSelEnd = offset, offset
+						m.logSelStart = startOff
+						if endOk {
+							m.logSelEnd = endOff
+						} else {
+							m.logSelEnd = startOff
+						}
 						m.logSelecting = true
 					}
 				case tea.MouseActionMotion:
-					if m.logSelecting {
-						m.logSelEnd = offset
+					if m.logSelecting && endOk {
+						m.logSelEnd = endOff
 					}
 				case tea.MouseActionRelease:
 					if msg.Button == tea.MouseButtonLeft {
+						if m.logSelecting && endOk {
+							m.logSelEnd = endOff
+						}
 						m.logSelecting = false
 					}
 				}
@@ -664,7 +679,7 @@ func (m *Model) sortedRows() []ServiceRow {
 }
 
 func (m *Model) renderFooter() string {
-	keys := "keys: q quit • tab focus • / filter • space toggle • a all • n none • j/k scroll • g/G top/bottom • f follow • ctrl+c copy (select with mouse)"
+	keys := "keys: q quit • tab focus • / filter • space toggle • a all • n none • j/k scroll • g/G top/bottom • f follow • Y copy visible • ctrl+c copy selection (select with mouse)"
 	if m.focusStatus {
 		keys = "keys: q quit • tab focus • / filter • space toggle • a all • n none • j/k select • g/G top/bottom • esc clear filter"
 	}
@@ -710,8 +725,40 @@ func portStr(port int) string {
 	return fmt.Sprintf("%d", port)
 }
 
-// logContentOffsetAt returns the character offset in lastLogContent for the given
-// cell (x,y) in the visible viewport content. y is 0-based line in visible area.
+// visualColumnToByteOffset returns the byte offset in line that corresponds to the
+// start of the col-th visible character (0-indexed), skipping ANSI escape sequences.
+// If col is past the end of the line, returns len(line).
+func visualColumnToByteOffset(line string, col int) int {
+	if col <= 0 {
+		return 0
+	}
+	var b, visible int
+	for b < len(line) {
+		if line[b] == '\x1b' && b+1 < len(line) && line[b+1] == '[' {
+			b += 2
+			for b < len(line) && (line[b] >= '0' && line[b] <= '9' || line[b] == ';') {
+				b++
+			}
+			if b < len(line) {
+				b++
+			}
+			continue
+		}
+		if visible == col {
+			return b
+		}
+		_, size := utf8.DecodeRuneInString(line[b:])
+		if size == 0 {
+			break
+		}
+		b += size
+		visible++
+	}
+	return b
+}
+
+// logContentOffsetAt returns the character offset in lastLogContent for the start
+// of the character at cell (x,y). y is 0-based line in the visible viewport area.
 func (m *Model) logContentOffsetAt(x, y int) (int, bool) {
 	if m.lastLogContent == "" {
 		return 0, false
@@ -725,14 +772,36 @@ func (m *Model) logContentOffsetAt(x, y int) (int, bool) {
 	if x < 0 {
 		x = 0
 	}
-	if x > len(line) {
-		x = len(line)
-	}
-	offset := 0
+	lineStart := 0
 	for i := 0; i < lineIdx; i++ {
-		offset += len(lines[i]) + 1
+		lineStart += len(lines[i]) + 1
 	}
-	return offset + x, true
+	byteInLine := visualColumnToByteOffset(line, x)
+	return lineStart + byteInLine, true
+}
+
+// logContentOffsetAtEnd returns the byte offset in lastLogContent immediately
+// after the character at cell (x,y), so a selection from start to this end is inclusive.
+func (m *Model) logContentOffsetAtEnd(x, y int) (int, bool) {
+	if m.lastLogContent == "" {
+		return 0, false
+	}
+	lines := strings.Split(m.lastLogContent, "\n")
+	lineIdx := m.viewport.YOffset + y
+	if lineIdx < 0 || lineIdx >= len(lines) {
+		return 0, false
+	}
+	line := lines[lineIdx]
+	if x < 0 {
+		x = 0
+	}
+	lineStart := 0
+	for i := 0; i < lineIdx; i++ {
+		lineStart += len(lines[i]) + 1
+	}
+	// Offset after the character at column x (so x+1 visible chars)
+	byteInLine := visualColumnToByteOffset(line, x+1)
+	return lineStart + byteInLine, true
 }
 
 // copyLogSelection copies the selected log text (plain, ANSI stripped) to the clipboard.
@@ -760,6 +829,32 @@ func (m *Model) copyLogSelection() bool {
 		return true
 	}
 	_ = clipboard.WriteAll(plain)
+	return true
+}
+
+// copyVisibleLogs copies the currently visible log content (plain, ANSI stripped) to the clipboard.
+// Returns true so the key is consumed.
+func (m *Model) copyVisibleLogs() bool {
+	if m.lastLogContent == "" {
+		return true
+	}
+	lines := strings.Split(m.lastLogContent, "\n")
+	start := m.viewport.YOffset
+	end := start + m.viewport.Height
+	if start < 0 {
+		start = 0
+	}
+	if end > len(lines) {
+		end = len(lines)
+	}
+	if start >= end {
+		return true
+	}
+	visible := strings.Join(lines[start:end], "\n")
+	plain := stripANSI(visible)
+	if plain != "" {
+		_ = clipboard.WriteAll(plain)
+	}
 	return true
 }
 
