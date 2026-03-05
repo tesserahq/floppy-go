@@ -115,6 +115,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resize()
+		m.renderViewport() // re-render with new dimensions so truncation and follow stay correct
 		return m, nil
 	case tea.KeyMsg:
 		if m.filterMode {
@@ -376,6 +377,15 @@ func (m *Model) appendLog(line LogLine) {
 }
 
 func (m *Model) renderViewport() {
+	// Truncate each line to viewport width so one log line = one row. Otherwise
+	// lipgloss wraps long lines and the viewport's line-based scroll doesn't match
+	// visual rows, so content is cut off and "newer logs" never fully appear.
+	contentWidth := m.viewport.Width
+	if contentWidth < 40 {
+		contentWidth = 80
+	}
+	lineStyle := lipgloss.NewStyle().MaxWidth(contentWidth)
+
 	lines := make([]string, 0, len(m.logs))
 	showAll := len(m.filters) == 0
 	for _, line := range m.logs {
@@ -386,7 +396,8 @@ func (m *Model) renderViewport() {
 		}
 		color := m.colorFor(line.Service)
 		prefix := lipgloss.NewStyle().Foreground(color).Render(fmt.Sprintf("[%s]", line.Service))
-		lines = append(lines, fmt.Sprintf("%s %s", prefix, line.Text))
+		raw := fmt.Sprintf("%s %s", prefix, line.Text)
+		lines = append(lines, lineStyle.Render(raw))
 	}
 	content := strings.Join(lines, "\n")
 	m.lastLogContent = content
