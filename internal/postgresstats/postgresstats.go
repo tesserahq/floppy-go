@@ -10,16 +10,27 @@ import (
 	_ "github.com/lib/pq"
 )
 
+// StuckQuery represents one problematic backend from pg_stat_activity.
+type StuckQuery struct {
+	PID       int64  // backend pid
+	State     string // idle in transaction, active, etc.
+	Reason    string // "idle in transaction", "long-running", "blocking"
+	Query     string // truncated query text
+	Duration  string // human-readable duration in that state
+	AppName   string // application_name
+}
+
 // Stats holds a snapshot of Postgres metrics for display.
 type Stats struct {
-	Connections    int     // current connections
-	MaxConnections int     // max_connections
-	IdleInTx       int     // idle in transaction (stuck)
-	LongRunning    int     // active queries running > longQuerySec
-	BlockingLocks  int     // backends waiting on locks
-	CacheHitRatio  float64 // 0–1, from pg_stat_database
-	DatabaseSize   string  // human-readable size
-	Error          string  // non-empty if fetch failed
+	Connections    int          // current connections
+	MaxConnections int          // max_connections
+	IdleInTx       int          // idle in transaction (stuck)
+	LongRunning    int          // active queries running > longQuerySec
+	BlockingLocks  int          // backends waiting on locks
+	CacheHitRatio  float64      // 0–1, from pg_stat_database
+	DatabaseSize   string       // human-readable size
+	Error          string       // non-empty if fetch failed
+	StuckQueries   []StuckQuery // backends that are idle in tx, long-running, or blocking
 }
 
 const longQuerySec = 30
@@ -103,7 +114,91 @@ func Fetch(ctx context.Context, url string) Stats {
 		out.DatabaseSize = formatSize(sizeBytes)
 	}
 
+	// Stuck queries: idle in transaction, long-running active, and blocking
+	out.StuckQueries = fetchStuckQueries(ctx, db)
 	return out
+}
+
+const maxQueryLen = 120
+
+func fetchStuckQueries(ctx context.Context, db *sql.DB) []StuckQuery {
+	var out []StuckQuery
+	// Idle in transaction
+	rows, err := db.QueryContext(ctx, `
+		SELECT pid, state, COALESCE(left(query, $1), ''), (now() - state_change)::text, COALESCE(application_name, '')
+		FROM pg_stat_activity
+		WHERE state = 'idle in transaction' AND pid != pg_backend_pid()
+	`, maxQueryLen)
+	if err != nil {
+		return out
+	}
+	for rows.Next() {
+		var s StuckQuery
+		var dur string
+		if err := rows.Scan(&s.PID, &s.State, &s.Query, &dur, &s.AppName); err != nil {
+			continue
+		}
+		s.Reason = "idle in transaction"
+		s.Duration = formatDuration(dur)
+		out = append(out, s)
+	}
+	rows.Close()
+
+	// Long-running active
+	rows, err = db.QueryContext(ctx, `
+		SELECT pid, state, COALESCE(left(query, $1), ''), (now() - query_start)::text, COALESCE(application_name, '')
+		FROM pg_stat_activity
+		WHERE state = 'active' AND (now() - query_start) > interval '30 seconds' AND pid != pg_backend_pid()
+	`, maxQueryLen)
+	if err != nil {
+		return out
+	}
+	for rows.Next() {
+		var s StuckQuery
+		var dur string
+		if err := rows.Scan(&s.PID, &s.State, &s.Query, &dur, &s.AppName); err != nil {
+			continue
+		}
+		s.Reason = "long-running"
+		s.Duration = formatDuration(dur)
+		out = append(out, s)
+	}
+	rows.Close()
+
+	// Blocking (waiting on lock)
+	rows, err = db.QueryContext(ctx, `
+		SELECT pid, state, COALESCE(left(query, $1), ''), (now() - state_change)::text, COALESCE(application_name, '')
+		FROM pg_stat_activity
+		WHERE wait_event_type = 'Lock' AND pid != pg_backend_pid()
+	`, maxQueryLen)
+	if err != nil {
+		return out
+	}
+	for rows.Next() {
+		var s StuckQuery
+		var dur string
+		if err := rows.Scan(&s.PID, &s.State, &s.Query, &dur, &s.AppName); err != nil {
+			continue
+		}
+		s.Reason = "blocking"
+		s.Duration = formatDuration(dur)
+		out = append(out, s)
+	}
+	rows.Close()
+	return out
+}
+
+// formatDuration parses Postgres interval output like "00:02:30.123" or "1 day 02:03:04" into a short string.
+func formatDuration(dur string) string {
+	dur = strings.TrimSpace(dur)
+	if dur == "" {
+		return "-"
+	}
+	// Postgres returns interval as "HH:MM:SS.ms" or "X days HH:MM:SS.ms"
+	if strings.HasPrefix(dur, "00:00:00") {
+		return strings.TrimPrefix(dur, "00:00:00.")
+	}
+	return dur
 }
 
 func formatSize(b int64) string {

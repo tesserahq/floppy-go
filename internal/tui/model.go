@@ -35,8 +35,16 @@ type ServiceRow struct {
 	Port   int
 }
 
+// Left panel tab indices (gh-dash style tabs)
+const (
+	TabAppLogs = 0
+	TabPostgres = 1
+)
+
 type Model struct {
 	viewport    viewport.Model
+	pgViewport  viewport.Model
+	activeTab   int // TabAppLogs or TabPostgres
 	logCh       <-chan LogLine
 	statusCh    <-chan StatusUpdate
 	logs        []LogLine
@@ -83,6 +91,8 @@ func NewModel(logCh <-chan LogLine, statusCh <-chan StatusUpdate, initial []Serv
 
 	m := &Model{
 		viewport:     viewport.New(10, 10),
+		pgViewport:   viewport.New(10, 10),
+		activeTab:    TabAppLogs,
 		logCh:        logCh,
 		statusCh:     statusCh,
 		logs:         []LogLine{},
@@ -142,7 +152,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "ctrl+c":
-			if !m.focusStatus && m.copyLogSelection() {
+			if !m.focusStatus && m.activeTab == TabAppLogs && m.copyLogSelection() {
 				return m, nil
 			}
 			m.interrupted = true
@@ -150,6 +160,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q":
 			m.interrupted = true
 			return m, tea.Quit
+		case "1":
+			if m.postgresURL != "" {
+				m.activeTab = TabAppLogs
+			}
+			return m, nil
+		case "2":
+			if m.postgresURL != "" {
+				m.activeTab = TabPostgres
+			}
+			return m, nil
 		case "tab":
 			m.focusStatus = !m.focusStatus
 			return m, nil
@@ -190,8 +210,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			var cmd tea.Cmd
-			m.viewport, cmd = m.viewport.Update(msg)
-			m.follow = m.viewport.AtBottom()
+			if m.activeTab == TabPostgres {
+				m.pgViewport, cmd = m.pgViewport.Update(msg)
+			} else {
+				m.viewport, cmd = m.viewport.Update(msg)
+				m.follow = m.viewport.AtBottom()
+			}
 			return m, cmd
 		case "k", "up":
 			if m.focusStatus {
@@ -199,38 +223,54 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			var cmd tea.Cmd
-			m.viewport, cmd = m.viewport.Update(msg)
-			m.follow = m.viewport.AtBottom()
+			if m.activeTab == TabPostgres {
+				m.pgViewport, cmd = m.pgViewport.Update(msg)
+			} else {
+				m.viewport, cmd = m.viewport.Update(msg)
+				m.follow = m.viewport.AtBottom()
+			}
 			return m, cmd
 		case "g":
 			if m.focusStatus {
 				m.selected = 0
 				return m, nil
 			}
-			m.viewport.GotoTop()
-			m.follow = false
+			if m.activeTab == TabPostgres {
+				m.pgViewport.GotoTop()
+			} else {
+				m.viewport.GotoTop()
+				m.follow = false
+			}
 			return m, nil
 		case "G", "end":
 			if m.focusStatus {
 				m.selected = m.maxSelection()
 				return m, nil
 			}
-			m.viewport.GotoBottom()
-			m.follow = true
+			if m.activeTab == TabPostgres {
+				m.pgViewport.GotoBottom()
+			} else {
+				m.viewport.GotoBottom()
+				m.follow = true
+			}
 			return m, nil
 		case "pgup", "pgdown", "home":
 			var cmd tea.Cmd
-			m.viewport, cmd = m.viewport.Update(msg)
-			m.follow = m.viewport.AtBottom()
+			if m.activeTab == TabPostgres {
+				m.pgViewport, cmd = m.pgViewport.Update(msg)
+			} else {
+				m.viewport, cmd = m.viewport.Update(msg)
+				m.follow = m.viewport.AtBottom()
+			}
 			return m, cmd
 		}
 	case tea.MouseMsg:
 		if m.focusStatus {
 			return m, nil
 		}
-		// Log panel content area: left panel has border+padding, so content at (2,2)
-		contentLeft, contentTop := 2, 2
-		inLogContent := msg.X >= contentLeft && msg.Y >= contentTop &&
+		// Log panel content area: left panel has border+padding + tab bar, so content at (2,3)
+		contentLeft, contentTop := 2, 3
+		inLogContent := m.activeTab == TabAppLogs && msg.X >= contentLeft && msg.Y >= contentTop &&
 			msg.X < contentLeft+m.viewport.Width && msg.Y < contentTop+m.viewport.Height
 		if inLogContent {
 			cx, cy := msg.X-contentLeft, msg.Y-contentTop
@@ -271,8 +311,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
 			var cmd tea.Cmd
-			m.viewport, cmd = m.viewport.Update(msg)
-			m.follow = m.viewport.AtBottom()
+			if m.activeTab == TabPostgres {
+				m.pgViewport, cmd = m.pgViewport.Update(msg)
+			} else {
+				m.viewport, cmd = m.viewport.Update(msg)
+				m.follow = m.viewport.AtBottom()
+			}
 			return m, cmd
 		}
 	case tickMsg:
@@ -308,7 +352,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) View() string {
-	left := m.renderLogsPanel()
+	left := m.renderLeftPanel()
 	right := m.renderRightPanel()
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 	footer := m.renderFooter()
@@ -442,10 +486,65 @@ func (m *Model) resize() {
 	if leftWidth < 20 {
 		leftWidth = 20
 	}
-	m.viewport.Width = leftWidth - 2
-	m.viewport.Height = m.height - 5
-	if m.viewport.Height < 5 {
-		m.viewport.Height = 5
+	h := m.height - 6 // leave room for tab bar + footer
+	if h < 5 {
+		h = 5
+	}
+	w := leftWidth - 2
+	m.viewport.Width = w
+	m.viewport.Height = h
+	m.pgViewport.Width = w
+	m.pgViewport.Height = h
+}
+
+func (m *Model) renderTabBar() string {
+	appLabel := " App Logs "
+	if len(m.logs) > 0 {
+		appLabel = fmt.Sprintf(" App Logs (%d) ", len(m.logs))
+	}
+	pgLabel := " Postgres "
+	if m.postgresURL != "" && m.pgStats != nil && len(m.pgStats.StuckQueries) > 0 {
+		pgLabel = fmt.Sprintf(" Postgres (%d stuck) ", len(m.pgStats.StuckQueries))
+	}
+	inactive := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	active := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("7"))
+	var app, pg string
+	if m.activeTab == TabAppLogs {
+		app = active.Render(appLabel)
+		pg = inactive.Render(pgLabel)
+	} else {
+		app = inactive.Render(appLabel)
+		pg = active.Render(pgLabel)
+	}
+	return app + " " + lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("|") + " " + pg
+}
+
+func (m *Model) renderLeftPanel() string {
+	var content string
+	if m.postgresURL == "" {
+		// No Postgres: single panel (App Logs only)
+		content = m.viewport.View()
+		if !m.initialized && m.width > 0 {
+			m.initialized = true
+			m.renderViewport()
+		}
+		box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).Padding(0, 1)
+		return box.Width(m.viewport.Width + 2).Height(m.viewport.Height + 2).Render(content)
+	}
+	{
+		tabBar := m.renderTabBar()
+		if m.activeTab == TabAppLogs {
+			content = m.viewport.View()
+			if !m.initialized && m.width > 0 {
+				m.initialized = true
+				m.renderViewport()
+			}
+		} else {
+			m.renderPostgresViewport()
+			content = m.pgViewport.View()
+		}
+		box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).Padding(0, 1)
+		return box.Width(m.viewport.Width + 2).Height(m.viewport.Height + 3).Render(lipgloss.JoinVertical(lipgloss.Left, tabBar, content))
 	}
 }
 
@@ -503,6 +602,54 @@ func (m *Model) renderRightPanel() string {
 		panels = append(panels, m.renderDockerPanel())
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, panels...)
+}
+
+func (m *Model) renderPostgresViewport() {
+	contentWidth := m.pgViewport.Width
+	if contentWidth < 40 {
+		contentWidth = 80
+	}
+	lineStyle := lipgloss.NewStyle().MaxWidth(contentWidth)
+	var lines []string
+	if m.postgresURL == "" {
+		lines = append(lines, "Postgres monitoring not configured.")
+		m.pgViewport.SetContent(strings.Join(lines, "\n"))
+		return
+	}
+	if m.pgStats == nil {
+		lines = append(lines, "Connecting…")
+		m.pgViewport.SetContent(strings.Join(lines, "\n"))
+		return
+	}
+	if m.pgStats.Error != "" {
+		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render("Error: "+m.pgStats.Error))
+		m.pgViewport.SetContent(strings.Join(lines, "\n"))
+		return
+	}
+	sq := m.pgStats.StuckQueries
+	if len(sq) == 0 {
+		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Render("No stuck queries."))
+		lines = append(lines, "")
+		lines = append(lines, "Idle in transaction, long-running (>30s), and blocking backends will appear here.")
+		m.pgViewport.SetContent(strings.Join(lines, "\n"))
+		return
+	}
+	header := "PID       Reason                  Duration   Query"
+	lines = append(lines, lipgloss.NewStyle().Bold(true).Render(header))
+	sepLen := contentWidth
+	if sepLen > 80 {
+		sepLen = 80
+	}
+	lines = append(lines, strings.Repeat("─", sepLen))
+	for _, q := range sq {
+		reasonStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+		if q.Reason == "blocking" {
+			reasonStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+		}
+		line := fmt.Sprintf("%-9d %-24s %-10s %s", q.PID, reasonStyle.Render(q.Reason), q.Duration, q.Query)
+		lines = append(lines, lineStyle.Render(line))
+	}
+	m.pgViewport.SetContent(strings.Join(lines, "\n"))
 }
 
 func (m *Model) renderPostgresPanel() string {
@@ -679,7 +826,10 @@ func (m *Model) sortedRows() []ServiceRow {
 }
 
 func (m *Model) renderFooter() string {
-	keys := "keys: q quit • tab focus • / filter • space toggle • a all • n none • j/k scroll • g/G top/bottom • f follow • Y copy visible • ctrl+c copy selection (select with mouse)"
+	keys := "keys: q quit • tab focus • / filter • space toggle • j/k scroll • g/G top/bottom • f follow • Y copy"
+	if m.postgresURL != "" {
+		keys = "keys: q quit • 1 App Logs • 2 Postgres • tab focus • / filter • space toggle • j/k scroll • g/G top/bottom • f follow • Y copy"
+	}
 	if m.focusStatus {
 		keys = "keys: q quit • tab focus • / filter • space toggle • a all • n none • j/k select • g/G top/bottom • esc clear filter"
 	}
