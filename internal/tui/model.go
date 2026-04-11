@@ -268,8 +268,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.focusStatus {
 			return m, nil
 		}
-		// Log panel content area: left panel has border+padding + tab bar, so content at (2,3)
-		contentLeft, contentTop := 2, 3
+		// Log panel content area: left panel has border (1) + padding (1) = col 2.
+		// Row offset: top border (1) + optional tab bar (1 if postgres configured).
+		contentLeft := 2
+		contentTop := 1
+		if m.postgresURL != "" {
+			contentTop = 2
+		}
 		inLogContent := m.activeTab == TabAppLogs && msg.X >= contentLeft && msg.Y >= contentTop &&
 			msg.X < contentLeft+m.viewport.Width && msg.Y < contentTop+m.viewport.Height
 		if inLogContent {
@@ -436,14 +441,10 @@ func (m *Model) appendLog(line LogLine) {
 }
 
 func (m *Model) renderViewport() {
-	// Truncate each line to viewport width so one log line = one row. Otherwise
-	// lipgloss wraps long lines and the viewport's line-based scroll doesn't match
-	// visual rows, so content is cut off and "newer logs" never fully appear.
 	contentWidth := m.viewport.Width
 	if contentWidth < 40 {
 		contentWidth = 80
 	}
-	lineStyle := lipgloss.NewStyle().MaxWidth(contentWidth)
 
 	lines := make([]string, 0, len(m.logs))
 	showAll := len(m.filters) == 0
@@ -455,8 +456,30 @@ func (m *Model) renderViewport() {
 		}
 		color := m.colorFor(line.Service)
 		prefix := lipgloss.NewStyle().Foreground(color).Render(fmt.Sprintf("[%s]", line.Service))
-		raw := fmt.Sprintf("%s %s", prefix, line.Text)
-		lines = append(lines, lineStyle.Render(raw))
+		// Visible width of "[service] " (brackets + space, no ANSI)
+		prefixWidth := len(line.Service) + 3
+		textWidth := contentWidth - prefixWidth
+		if textWidth < 20 {
+			textWidth = 20
+		}
+		indent := strings.Repeat(" ", prefixWidth)
+
+		// Split on embedded newlines first, then hard-wrap each segment.
+		first := true
+		for _, seg := range strings.Split(line.Text, "\n") {
+			for _, chunk := range wrapRunes(seg, textWidth) {
+				if first {
+					lines = append(lines, fmt.Sprintf("%s %s", prefix, chunk))
+					first = false
+				} else {
+					lines = append(lines, indent+chunk)
+				}
+			}
+		}
+		if first {
+			// Empty text
+			lines = append(lines, prefix)
+		}
 	}
 	content := strings.Join(lines, "\n")
 	m.lastLogContent = content
@@ -1006,6 +1029,28 @@ func (m *Model) copyVisibleLogs() bool {
 		_ = clipboard.WriteAll(plain)
 	}
 	return true
+}
+
+// wrapRunes hard-wraps text into lines of at most width visible runes.
+// ANSI escape sequences in text are not counted toward width (assumed minimal).
+func wrapRunes(text string, width int) []string {
+	if width <= 0 || text == "" {
+		return []string{text}
+	}
+	runes := []rune(text)
+	if len(runes) <= width {
+		return []string{text}
+	}
+	var result []string
+	for len(runes) > 0 {
+		if len(runes) <= width {
+			result = append(result, string(runes))
+			break
+		}
+		result = append(result, string(runes[:width]))
+		runes = runes[width:]
+	}
+	return result
 }
 
 // stripANSI removes ANSI escape sequences (CSI SGR and similar) from s.
