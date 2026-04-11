@@ -116,7 +116,7 @@ func NewModel(logCh <-chan LogLine, statusCh <-chan StatusUpdate, initial []Serv
 }
 
 func NewProgram(model *Model) *tea.Program {
-	return tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	return tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseAllMotion())
 }
 
 func (m *Model) Init() tea.Cmd {
