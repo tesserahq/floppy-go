@@ -75,10 +75,13 @@ type Model struct {
 	tickCount int
 
 	// Log selection (when focus is on logs)
-	lastLogContent string
-	logSelStart    int
-	logSelEnd      int
-	logSelecting   bool
+	lastLogContent  string
+	logSelStart     int
+	logSelEnd       int
+	logSelecting    bool
+	lastClickTime   time.Time
+	lastClickX      int
+	lastClickY      int
 }
 
 type tickMsg time.Time
@@ -269,11 +272,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// Log panel content area: left panel has border (1) + padding (1) = col 2.
-		// Row offset: top border (1) + optional tab bar (1 if postgres configured).
+		// Row offset: top border (1) + tab bar row (1, always present) + blank separator (1) = 3.
+		// Without postgres the tab bar is not rendered: top border (1) = 1.
 		contentLeft := 2
 		contentTop := 1
 		if m.postgresURL != "" {
-			contentTop = 2
+			contentTop = 3
 		}
 		inLogContent := m.activeTab == TabAppLogs && msg.X >= contentLeft && msg.Y >= contentTop &&
 			msg.X < contentLeft+m.viewport.Width && msg.Y < contentTop+m.viewport.Height
@@ -285,13 +289,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				switch msg.Action {
 				case tea.MouseActionPress:
 					if msg.Button == tea.MouseButtonLeft {
-						m.logSelStart = startOff
-						if endOk {
-							m.logSelEnd = endOff
+						now := time.Now()
+						isDoubleClick := now.Sub(m.lastClickTime) < 500*time.Millisecond &&
+							m.lastClickX == msg.X && m.lastClickY == msg.Y
+						m.lastClickTime = now
+						m.lastClickX = msg.X
+						m.lastClickY = msg.Y
+						if isDoubleClick {
+							// Select the entire line
+							m.logSelStart, _ = m.logLineStart(cy)
+							m.logSelEnd, _ = m.logLineEnd(cy)
+							m.logSelecting = false
 						} else {
-							m.logSelEnd = startOff
+							m.logSelStart = startOff
+							if endOk {
+								m.logSelEnd = endOff
+							} else {
+								m.logSelEnd = startOff
+							}
+							m.logSelecting = true
 						}
-						m.logSelecting = true
 					}
 				case tea.MouseActionMotion:
 					if m.logSelecting && endOk {
@@ -975,6 +992,40 @@ func (m *Model) logContentOffsetAtEnd(x, y int) (int, bool) {
 	// Offset after the character at column x (so x+1 visible chars)
 	byteInLine := visualColumnToByteOffset(line, x+1)
 	return lineStart + byteInLine, true
+}
+
+// logLineStart returns the byte offset of the start of line cy in lastLogContent.
+func (m *Model) logLineStart(cy int) (int, bool) {
+	if m.lastLogContent == "" {
+		return 0, false
+	}
+	lines := strings.Split(m.lastLogContent, "\n")
+	lineIdx := m.viewport.YOffset + cy
+	if lineIdx < 0 || lineIdx >= len(lines) {
+		return 0, false
+	}
+	lineStart := 0
+	for i := 0; i < lineIdx; i++ {
+		lineStart += len(lines[i]) + 1
+	}
+	return lineStart, true
+}
+
+// logLineEnd returns the byte offset of the end of line cy in lastLogContent (exclusive).
+func (m *Model) logLineEnd(cy int) (int, bool) {
+	if m.lastLogContent == "" {
+		return 0, false
+	}
+	lines := strings.Split(m.lastLogContent, "\n")
+	lineIdx := m.viewport.YOffset + cy
+	if lineIdx < 0 || lineIdx >= len(lines) {
+		return 0, false
+	}
+	lineStart := 0
+	for i := 0; i < lineIdx; i++ {
+		lineStart += len(lines[i]) + 1
+	}
+	return lineStart + len(lines[lineIdx]), true
 }
 
 // copyLogSelection copies the selected log text (plain, ANSI stripped) to the clipboard.
