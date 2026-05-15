@@ -501,18 +501,12 @@ func (m *Model) renderViewport() {
 	content := strings.Join(lines, "\n")
 	m.lastLogContent = content
 	if m.logSelStart != m.logSelEnd {
-		s, e := m.logSelStart, m.logSelEnd
-		if s > e {
-			s, e = e, s
+		s, e := normalizeLogSelection(m.logSelStart, m.logSelEnd, len(content))
+		m.logSelStart, m.logSelEnd = s, e
+		if s < e {
+			// Reverse video for selection (SGR 7)
+			content = content[:s] + "\x1b[7m" + content[s:e] + "\x1b[0m" + content[e:]
 		}
-		if s < 0 {
-			s = 0
-		}
-		if e > len(content) {
-			e = len(content)
-		}
-		// Reverse video for selection (SGR 7)
-		content = content[:s] + "\x1b[7m" + content[s:e] + "\x1b[0m" + content[e:]
 	}
 	m.viewport.SetContent(content)
 	if m.follow {
@@ -947,6 +941,26 @@ func visualColumnToByteOffset(line string, col int) int {
 	return b
 }
 
+// normalizeLogSelection clamps byte offsets to [0, maxLen] and ensures s <= e.
+func normalizeLogSelection(s, e, maxLen int) (int, int) {
+	if s > e {
+		s, e = e, s
+	}
+	if s < 0 {
+		s = 0
+	}
+	if e < 0 {
+		e = 0
+	}
+	if s > maxLen {
+		s = maxLen
+	}
+	if e > maxLen {
+		e = maxLen
+	}
+	return s, e
+}
+
 // logContentOffsetAt returns the character offset in lastLogContent for the start
 // of the character at cell (x,y). y is 0-based line in the visible viewport area.
 func (m *Model) logContentOffsetAt(x, y int) (int, bool) {
@@ -1034,18 +1048,10 @@ func (m *Model) copyLogSelection() bool {
 	if m.lastLogContent == "" {
 		return false
 	}
-	s, e := m.logSelStart, m.logSelEnd
+	s, e := normalizeLogSelection(m.logSelStart, m.logSelEnd, len(m.lastLogContent))
+	m.logSelStart, m.logSelEnd = s, e
 	if s == e {
 		return false
-	}
-	if s > e {
-		s, e = e, s
-	}
-	if s < 0 {
-		s = 0
-	}
-	if e > len(m.lastLogContent) {
-		e = len(m.lastLogContent)
 	}
 	selected := m.lastLogContent[s:e]
 	plain := stripANSI(selected)
