@@ -8,7 +8,7 @@ require (
 	github.com/charmbracelet/bubbletea v0.25.0
 	github.com/charmbracelet/lipgloss v0.9.1
 	github.com/creack/pty/v2 v2.0.1
-	github.com/lib/pq v1.11.2
+	github.com/lib/pq v1.12.3
 	github.com/spf13/cobra v1.8.1
 	gopkg.in/yaml.v3 v3.0.1
 )
