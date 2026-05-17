@@ -3,6 +3,7 @@ package manager
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -17,15 +18,23 @@ type PortConflict struct {
 	Processes []string
 }
 
+// lsofExitMeansPortFree reports whether lsof exited because nothing is listening.
+// lsof uses exit code 1 when no matching processes are found; stderr may still
+// contain filesystem warnings on macOS.
+func lsofExitMeansPortFree(err error) bool {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode() == 1
+	}
+	return false
+}
+
 func lsofPort(port int) ([]string, error) {
 	cmd := exec.Command("lsof", "-i", fmt.Sprintf("tcp:%d", port))
 	out, err := cmd.Output()
 	if err != nil {
-		// lsof returns non-zero when no processes found
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			if len(exitErr.Stderr) == 0 {
-				return nil, nil
-			}
+		if lsofExitMeansPortFree(err) {
+			return nil, nil
 		}
 		return nil, err
 	}

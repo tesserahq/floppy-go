@@ -845,8 +845,7 @@ func (m *Manager) validatePorts(services []string, force bool) error {
 	for port, users := range ports {
 		procLines, err := lsofPort(port)
 		if err != nil {
-			fmt.Printf("Warning: could not check port %d: %v\n", port, err)
-			continue
+			return fmt.Errorf("could not check port %d: %w", port, err)
 		}
 		if len(procLines) > 0 {
 			conflicts = append(conflicts, PortConflict{Port: port, Services: users, Processes: procLines})
@@ -854,7 +853,6 @@ func (m *Manager) validatePorts(services []string, force bool) error {
 	}
 
 	if len(conflicts) == 0 {
-		fmt.Println("✅ All required ports are available")
 		return nil
 	}
 
